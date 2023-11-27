@@ -6,7 +6,7 @@
 # @ Description: This file is written to compute the diabatic heating
 # source: Estimates of Tropical Diabatic Heating Profiles: Commonalities and Uncertainties https://journals.ametsoc.org/view/journals/clim/23/3/2009jcli3025.1.xml
 # Sample exmaple: https://hannahlab.org/a-comparison-of-methods-for-estimating-diabatic-heating/
-
+# We use ERA 5, August 2016, and calculated the heating estimates with both method and averaged them over the entire Tropics (30°S-30°N).
 
 
 import numpy as np
@@ -32,57 +32,64 @@ def ddt(da,dt):
 
 
 
-# def ddx(da):
-#     rd = 6378140
-#     dim = da.shape
-#     lat =  da.latitude
-#     lon =  (da.longitude)
-#     nlat = dim[2]
-#     nlon = dim[3]
-#     df = np.zeros(da.shape)
-
-#     xvals = np.arange(0,nlon-1,1)      
-#     Evals = xvals[2:nlon-1]        # East values
-#     Xvals = xvals[1:nlon-2]        # East-West Center Values
-#     Wvals = xvals[0:nlon-3]        # West Values
-#     dx = lon
-#     dx[Xvals] = (lon[Evals]+lon[Xvals])/2 - (lon[Wvals]+lon[Xvals])/2
-
-
-
-
-
-def ddx(da):
-
+def ddx(da,lon_cyclic=False):
     rd = 6378140
     dim = da.shape
-    lat =  da.lat
-    lon =  da.lon
-    NLATS = dim[2]
-    NLONS = dim[3]
+    lat =  da.lat.values
+    lon =  (da.lon.values)
+    nlat = dim[2]
+    nlon = dim[3]
     df = np.zeros(da.shape)
-    x=da
-    for i in tqdm(range(NLATS-1)):
-        j = 0
-        dx = ((lon[j+1] - lon[j]) + 360 - lon[NLONS - 1])*rd*2*3.14159/360
-        dx = dx*np.cos(lat[i]/180.*3.14159)
-        df[:,:,i,j] = (x[:,:,i,j+1] - x[:,:,i,NLONS - 1]) / dx
-
-        for j in range(1,NLONS-2):
-            dx = (lon[j+1] - lon[j-1])*rd*2*3.14159/360
-            dx = dx*np.cos(lat[i]/180.*3.14159)
-            df[:,:,i,j] = (x[:,:,i,j+1] - x[:,:,i,j-1]) / dx
-        
-        j = NLONS - 1
-        dx = (360 - lon[j-1])*rd*2*3.14159/360
-        dx = dx*np.cos(lat[i]/180.*3.14159)
-        df[:,:,i,j] = (x[:,:,i,0] - x[:,:,i,j-1]) / dx
-
-
+    X=da.values
+    if lon_cyclic :
+        xvals = np.arange(0,nlon-1,1)      ;
+        Xvals = xvals[0:nlon-1]        # East-West Center Values
+        Evals = (Xvals+1)%nlon         # East values
+        Wvals = (Xvals+nlon-1)%nlon         # West Values
+    else:
+        xvals = np.arange(0,nlon-1,1)      
+        Evals = xvals[2:nlon-1]        # East values
+        Xvals = xvals[1:nlon-2]        # East-West Center Values
+        Wvals = xvals[0:nlon-3]        # West Values
+    dx = lon
+    dx[Xvals] = (lon[Evals]+lon[Xvals])/2 - (lon[Wvals]+lon[Xvals])/2
+    deltax=np.broadcast_to(dx[None,None,None,:],(dim))
+    deltax=deltax*111000
+    latx=np.cos(lat)
+    dellon=deltax*np.broadcast_to(latx[None,None,:,None],dim)
+    df[:,:,:,Xvals] = ( (X[:,:,:,Evals]+X[:,:,:,Xvals])/2 - (X[:,:,:,Wvals]+X[:,:,:,Xvals])/2 ) /dellon[:,:,:,Xvals]
 
     return df
 
+# def ddx(da):
 
+#     rd = 6378140
+#     dim = da.shape
+#     lat =  da.lat
+#     lon =  da.lon
+#     NLATS = dim[2]
+#     NLONS = dim[3]
+#     df = np.zeros(da.shape)
+#     x=da
+#     for i in tqdm(range(NLATS-1)):
+#         j = 0
+#         dx = ((lon[j+1] - lon[j]) + 360 - lon[NLONS - 1])*rd*2*3.14159/360
+#         dx = dx*np.cos(lat[i]/180.*3.14159)
+#         df[:,:,i,j] = (x[:,:,i,j+1] - x[:,:,i,NLONS - 1]) / dx
+
+#         for j in range(1,NLONS-2):
+#             dx = (lon[j+1] - lon[j-1])*rd*2*3.14159/360
+#             dx = dx*np.cos(lat[i]/180.*3.14159)
+#             df[:,:,i,j] = (x[:,:,i,j+1] - x[:,:,i,j-1]) / dx
+        
+#         j = NLONS - 1
+#         dx = (360 - lon[j-1])*rd*2*3.14159/360
+#         dx = dx*np.cos(lat[i]/180.*3.14159)
+#         df[:,:,i,j] = (x[:,:,i,0] - x[:,:,i,j-1]) / dx
+
+
+
+#     return df
 
 
 def ddy(da):
@@ -112,7 +119,7 @@ def ddy(da):
 def ddp(da):
     rd = 6378140
     dim = da.shape
-    lev=da.level*100
+    lev=da.level
     llev=np.log10(lev)
     nlev=dim[1]
     df = np.zeros(da.shape)
@@ -137,8 +144,8 @@ def ddp(da):
 
 
 
-ds=xr.open_dataset("ERA5_1deg.nc")
-
+ds=xr.open_dataset("../data/ERA5_1deg.nc")
+#ds=ds.rename({"latitude":"lat","longitude":"lon"})
 daT=ds.t
 daU=ds.u
 daV=ds.v 
@@ -160,10 +167,19 @@ cal_dx=ddx(pt)
 cal_dy=ddy(pt)
 cal_dp=ddp(pt)
 
-Q=cal_dt+daU*cal_dx+daV*cal_dy+daW*cal_dp
+R = 287.05
+Cp = 1005
+
+cons=Cp*(daT.data/pt.data)
+
+Q=cons*(cal_dt+daU*cal_dx+daV*cal_dy+daW*cal_dp)
 
 Q_zonal=Q.mean("lon")
 Q_time=Q_zonal.mean("time")
+
+ax=plt.figure().add_subplot()
+Q_time.plot.contourf(ax=ax,levels=20)
+ax.invert_yaxis()
 
 #daPT=daT.copy()
 
